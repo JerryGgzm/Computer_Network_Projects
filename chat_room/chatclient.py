@@ -6,29 +6,35 @@
 # Member 3: 
 
 
-
 # Note: 
 # This starter code is optional. Feel free to develop your own solution. 
 
 
 # Import any necessary libraries below
-import socket, threading, sys, os
+import socket
+import threading 
+import sys
 from pg3lib import *
 
 # Any global variables
-BUFFER =  2048
+BUFFER = 2048
+openThread = True
+key_from_server = ""
+confirmation = ""
+lists = ""
+done_CH = False
 
-# Create the server public key 
+# Create the client public key 
 key = getPubKey()
 
 # Convert from int to byte
 def sendint(data):
     return int(data).to_bytes(4, byteorder='big', signed=True)
 
+
 # Convert from byte to int
 def receiveint(data):
     return int.from_bytes(data, byteorder='big', signed=True)
-
 
 
 """
@@ -40,30 +46,77 @@ Returns:
 Hint: you can use the first character of the message to distinguish different types of message
 """
 
-def accept_messages():
+def accept_messages(): 
+    while True:
+        # should thread be closed
+        if openThread == False:
+            break
 
-    # Try to receive messages
-    try:
-        msg = sock.recv(BUFFER)
-    except socket.error as e:
-        print("Receive size of operation error!")
-        sys.exit()
+        # Try to receive messages type
+        try:
+            type_length = sock.recv(4)
+        except socket.error as e:
+            print("Receive size of operation error!", flush=True)
+            sys.exit()
+        try:
+            types = sock.recv(receiveint(type_length))
+        except socket.error as e:
+            print("Receive size of operation error!", flush=True)
+            sys.exit()
+        types = types.decode()
+
+
+        # Try to receive messages
+        try:
+            msg_length = sock.recv(4)
+        except socket.error as e:
+            print("Receive size of operation error!", flush=True)
+            sys.exit()
+
+        try:
+            msg = sock.recv(receiveint(msg_length))
+        except socket.error as e:
+            print("Receive size of operation error!", flush=True)
+            sys.exit()
+
+        if types == 'PM' or types == 'BM':
+            if types == "BM":
+                print(f"\n**** Received a public message ****: {msg.decode()}", flush=True)
+            else:
+                msg_encrypt = decrypt(msg)
+                print(f"\n**** Received a private message ****: {msg_encrypt.decode()}", flush=True)
+            print("Please enter your operation (BM: Broadcast Messaging, PM: Private Messaging, CH: Chat History, EX: Exit):", flush=True)
+        elif types == 'key':
+            global key_from_server
+            key_from_server = msg
+
+        elif types == "LIST":
+            global lists
+            lists = msg.decode().split()        # a list of active clients
+            print("Peers Online: \n")
+            for i in lists:
+                print(i + '\n')
+        
+        elif types == "CH":
+            chat_history = msg.decode()
+            if chat_history == "Done":
+                global done_CH
+                done_CH = True
+            else:
+                print(chat_history, flush=True)
+
+        else:
+            global confirmation
+            confirmation = msg.decode()          # for Confirmation and CH types of message
+        
     
-    # Check if the message is an int 
-    try:
-        message = receiveint(msg)
-        print(f"Received a message: {message}")
-    except TypeError as e:
-        print(f"Received a message: {msg.decode()}")
-
-
-
 
 if __name__ == '__main__': 
     # TODO: Validate input arguments
     
     hostname = sys.argv[1]
     PORT = sys.argv[2]
+    username = sys.argv[3]
 
     # Find the host by its name and create host's address
     try:
@@ -89,176 +142,166 @@ if __name__ == '__main__':
         print("Connection failed!")
         sys.exit()
 
-    print("Connection to server established")
+    print("Connection to server established!")
     
-    
-
-    # TODO: Send username to the server and login/register the user
-    username = input("Please enter your username: ")
-    sock.send(sendint(len(username)))
-    sock.send(username.encode())
-
-    # Receive server's response
-    try:
-        response_binary = sock.recv(4)
-    except socket.error as e:
-        print("Receive size of response error!")
-        sys.exit()
-    response = receiveint(response_binary)
-
-    # Receive server's public key
-    try:
-        server_key = sock.recv(BUFFER)
-    except socket.error as e:
-        print("Receive server's public key error!")
-        sys.exit()
-
-    # Perform login/register
-    if response == 1:
-        print('Your username has been successfully created!')   # Prompt user to create a password
-        password = input("Now please create your password: ")
-        sock.send(sendint(len(password)))
-        sock.send(encrypt(server_key, password))                # encrypt the password using server's pubKey
-
-        # Receive and print server's reponse
-        try:
-            reponse_size = sock.recv(4)
-        except socket.error as e:
-            print("Receive size of server response error!")
-            sys.exit()
-        try:
-            reponse_msg = sock.recv(receiveint(reponse_size))
-        except socket.error as e:
-            print("Receive server response error!")
-            sys.exit()
-        print(reponse_msg.decode())
-    else:
-        while True:
-            # Type in password
-            password = input("Please type in your password: ")
-            sock.send(sendint(len(password)))
-            sock.send(encrypt(server_key, password))
-
-            # Receive server's response on password
-            try:
-                password_response = sock.recv(4)
-            except socket.error as e:
-                print("Receive password response error!")
-                sys.exit()
-            pas_response = receiveint(password_response)
-
-            # If it is 2, that means log in successfully 
-            if pas_response == 2:
-                break
-            else:
-                print("Wrong password!")
-
-            # Inform client that the account has been logged in
-        print("You successfully log into your account!")
-
-     # Send client's public key to server
-    sock.send(key)
-
 
     # TODO: initiate a thread for receiving message
     chat = threading.Thread(target=accept_messages, daemon=True)    # Daemon = True will release memory after use
     chat.start()
 
+    # TODO: Send username to the server and login/register the user
+    sock.send(sendint(len(username)))
+    sock.send(username.encode())
+
+    # wait until the client receives the key
+    while key_from_server == "":           
+        if key_from_server != "":
+            break
+
+    # Receive server's response
+    # this happens in accept_messages() thread, confirmation will be changed
+    # wait until receiving server's confirmation
+    while confirmation == "":
+        if confirmation != "":
+            break
+
+    # Perform login/register
+    if confirmation == "Now please create your password!":
+        # Prompt user to create a password
+        print('Your username has been successfully created!')   
+        
+        # reinitialize confirmation
+        confirmation = ""
+
+        password = input("Now please create your password: \n")
+        encrypted_password = encrypt(password.encode(), key_from_server)
+        sock.send(sendint(len(encrypted_password)))
+        sock.send(encrypted_password)                           # encrypt the password using server's pubKey
+
+        # Receive and print server's reponse
+        # this happens in accept_messages() thread, confirmation will be changed
+        # wait until the client receives the confirmation
+        while confirmation == "":           
+            if confirmation != "":
+                break
+        print(confirmation, flush=True)
+
+    else:
+        while True:
+            # reinitialize confirmation
+            confirmation = ""
+
+            # Type in password
+            password = input('Now please type in your password!: \n')
+            encrypted_password = encrypt(password.encode(), key_from_server)
+            sock.send(sendint(len(encrypted_password)))
+            sock.send(encrypted_password)
+
+            # wait until the client receives the confirmation
+            while confirmation == "":           
+                if confirmation != "":
+                    break
+
+            # If it is the right message, that means log in successfully 
+            if confirmation == "You successfully log into your account!":
+                break
+            else:
+                # wrong password!!!
+                print(confirmation) 
+
+        # Inform client that the account has been logged in
+        # Message printed in accept_messages() thread, confirmation will be changed
+        print(confirmation, flush=True)
+
+
+    # Send client's public key to server
+    sock.send(sendint(len(key)))
+    sock.send(key)
+
 
     # TODO: use a loop to handle the operations (i.e., BM, PM, EX)
-    while True:         
+    while True:  
+        # Initialize some important values
+        lists = ""    
+        key_from_server = ""   
+        confirmation = ""
+        done_CH = False
+
         # Prompt client to send operations
-        operation = input("Please enter your operation (BM: Broadcast Messaging, PM: Private Messaging, CH: Chat History, EX: Exit): ")
+        operation = input("Please enter your operation (BM: Broadcast Messaging, PM: Private Messaging, CH: Chat History, EX: Exit): \n")
         sock.send(sendint(len(operation)))
         sock.send(operation.encode())
 
         # Perform based on client's command
         if operation == 'BM':
-            try:
-                bm_ack = sock.recv(4)
-            except socket.error as e:
-                print("Receive message broadcasting response error!")
-                sys.exit()
-            bm_response = receiveint(bm_ack)
-
-            if bm_response == 1:                                            #receive an acknowledgement from the server                             
-                message_broadcasting = input("Enter the public message:")   
+            # wait until receiving server's confirmation
+            while confirmation == "":
+                if confirmation != "":
+                    break
+            
+            if confirmation == "The server is ready to send broadcast message!":
+                server_ready = confirmation                                                                      
+                message_broadcasting = input("Enter the public message:  ")   
                 sock.send(sendint(len(message_broadcasting)))               
-                sock.send(message_broadcasting.encode())                    #send the message to the server
-                try:
-                    server_receive_ack = sock.recv(4)
-                except socket.error as e:
-                    print("Server receiving broadcasting message error!")
-                    sys.exit()
-                server_receiving_msg_response = receiveint(server_receive_ack)  
-                if server_receiving_msg_response == 2:                       #verify whether the server has received the message
-                    print("Public message sent.")
-                    continue
+                sock.send(message_broadcasting.encode())                    # send the message to the server
+    
+                # wait until receiving server's new confirmation
+                while confirmation == server_ready:
+                    if confirmation != server_ready:
+                        break
+                print(confirmation)
             else:
                 print("Cannot connect with the server.")
-                continue
-
-
-
+            continue 
+                                                                
         elif operation == 'PM':
-            try:
-                client_number = sock.recv(4)
-            except socket.error as e:
-                print("Receive size of client number error!")
-                sys.exit()                                         
-            try:
-                client = sock.recv(receiveint(client_number))              #receive the message that needed to be broadcast
-            except socket.error as e:
-                print("Receive client message error!")              
-                sys.exit()
-            client = client.decode().split()
-            print("Peers Online: \n")
-            for i in client:
-                print(i+'\n')
+            # receive all online clients
+            # this takes place in accept_messages() thread
+            # wait until the server sends all online clients
+            while lists == "":           
+                if lists != "":
+                    break
             
-            target_client = input("Peer to message: ")          #choose which client we want to send private message to
-            msg = input("Enter the private mesage: ")           #the content of private message
+            while True:
+                target_client = input("Peer to message:  ")         # choose which client we want to send private message to
+                if target_client in lists:
+                    break                                           # If the target client not in lists, back to input
+                print("Invalid client!")
 
             sock.send(sendint(len(target_client)))
             sock.send(target_client.encode())
 
-            sock.send(sendint(len(msg)))
-            sock.send(msg.encode())
+            # wait until the client receives the key
+            while key_from_server == "":           
+                if key_from_server != "":
+                    break
+            print("Your private message will be encrypted!")
 
-            try:
-                pm_ack = sock.recv(4)
-            except socket.error as e:
-                print("Receive message private messaging response error!")
-                sys.exit()
-            pm_response = receiveint(pm_ack)
+            msg = input("Enter the private mesage: ")           # the content of private message
+            encrypt_msg = encrypt(msg.encode(), key_from_server)
+            sock.send(sendint(len(encrypt_msg)))
+            sock.send(encrypt_msg)
 
-            if pm_response == 1:
-                print("Private message has been sent.")
-            elif pm_response == 0:
-                print("Target client is not online, failed to send the message.")
+            # wait until receiving server's confirmation
+            while confirmation == "":
+                if confirmation != "":
+                    break
+            print(confirmation)
 
+            continue
 
-        
+        elif operation == 'CH':
+            # wait until the thread prints out chat history
+            while done_CH == False:
+                if done_CH == True:
+                    break
+            continue
             
-
-
         elif operation == 'EX':
+            openThread = False
+            chat.join()
             sock.close()
             print("The session has ended")
             break
-        elif operation == 'CH':
-            file_path = os.path.join(os.getcwd(), f"{username}.txt")
-            with open(file_path, "w") as f:            # write data to the file
-                while True:
-                    data = sock.recv(BUFFER)
-                    if not data:
-                        break
-                    f.write(data.decode())
-            
-            with open(file_path, 'r') as f:             # get and print data from the file
-                lines = f.readlines()                   # Example lines: ["Ann, 12345\n", "John, 54231\n"]
-                for line in lines:
-                    print(line)
-            continue
         else:
             print("Invalid command!")
